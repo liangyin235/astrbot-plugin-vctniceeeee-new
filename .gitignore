@@ -1,0 +1,16 @@
+# 运行时状态
+__pycache__/
+*.py[cod]
+*.pyo
+monitor_state.json
+
+# 本地数据 / 临时文件
+data/
+*.bak*
+*.log
+
+# 编辑器 / 系统
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
