@@ -619,8 +619,8 @@ _HELP_TEXT = (
 
 
 @register(
-    "astrbot_plugin_vct_cn",
-    "qaqxi",
+    "astrbot_plugin_vctniceeeee_new",
+    "liangyin235",
     "VCT CN 无畏契约中国赛区比赛播报（赛程 / 比分 / 详情 / 实时监控）",
     "1.2.0",
     "",

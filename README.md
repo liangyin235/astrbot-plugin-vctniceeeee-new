@@ -1,4 +1,4 @@
-# astrbot_plugin_vct_cn
+# astrbot_plugin_vctniceeeee_new
 
 > VCT CN（无畏契约中国赛区）比赛播报插件 · for [AstrBot](https://github.com/AstrBotDevs/AstrBot)
 
@@ -25,15 +25,15 @@
 1. 将本仓库放入 AstrBot 的插件目录：
 
    ```
-   data/plugins/astrbot_plugin_vct_cn/
+   data/plugins/astrbot_plugin_vctniceeeee_new/
    ```
 
-   > 注意：目录名必须是 `astrbot_plugin_vct_cn`，且该目录下直接是 `main.py`、`metadata.yaml` 等文件。
+   > 注意：目录名必须是 `astrbot_plugin_vctniceeeee_new`，且该目录下直接是 `main.py`、`metadata.yaml` 等文件。
 
 2. 安装依赖（AstrBot 通常会自动安装 `requirements.txt`；如未自动安装可手动执行）：
 
    ```bash
-   pip install -r data/plugins/astrbot_plugin_vct_cn/requirements.txt
+   pip install -r data/plugins/astrbot_plugin_vctniceeeee_new/requirements.txt
    ```
 
 3. 重载插件 / 重启 AstrBot。
@@ -73,7 +73,7 @@
 ## 目录结构
 
 ```
-astrbot_plugin_vct_cn/
+astrbot_plugin_vctniceeeee_new/
 ├── main.py             # 插件入口、命令、定时调度、渲染
 ├── match_parser.py     # 比赛详情解析
 ├── haojiao.py          # 备用数据源
