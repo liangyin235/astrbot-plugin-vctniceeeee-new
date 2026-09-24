@@ -40,13 +40,25 @@ FETCH_TIMEOUT = 30
 TRIGGER_MINUTES = 60  # 开赛前 60 分钟内视为"即将开始"
 
 # 赛事筛选策略（数据源 vlr.gg/matches）：
-#   1) 含中国队的比赛 —— 一律保留；
-#   2) 国际赛事（VCT 全球冠军赛 / Masters）—— 保留该赛事的全部比赛，
-#      这样即使中国队被淘汰，淘汰赛/决赛也能照常播报。
-# 注意：地区联赛名形如 "Champions Tour 2026: China Stage 2"，含 "champions tour"，
-# 必须排除，否则会把国内联赛的非中国队场次也一起播报。
-INTERNATIONAL_EVENT_EXCLUDE = ("champions tour",)
-INTERNATIONAL_EVENT_INCLUDE = ("champions", "masters")
+#   1) 含中国队的比赛 —— 一律保留（不限赛事）；
+#   2) 国际赛事 —— 保留该赛事的全部比赛，这样即使中国队被淘汰，
+#      淘汰赛/决赛也能照常播报。
+#
+# 国际赛事用「赛事名正则」精确匹配，避免误伤：
+#   ✅ Valorant Champions 2026            全球冠军赛
+#   ✅ Valorant Masters Toronto 2026       大师赛
+#   ✅ Champions Tour 2023: Masters Tokyo  大师赛（旧命名）
+#   ✅ VCT 2026: Masters Toronto           大师赛
+#   ❌ Champions Tour 2026: China Stage 2  地区联赛（含 "Champions Tour"）
+#   ❌ KOV Masters 2026: Summer            第三方赛事（非 VCT 前缀）
+#   ❌ Game Changers 2026: Championship …  Game Changers 女子赛
+INTERNATIONAL_EVENT_PATTERNS = (
+    r"^valorant\s+champions\b(?!\s+tour)",
+    r"^(valorant|vct|champions\s+tour)\b.*\bmasters\b",
+)
+INTERNATIONAL_EVENT_RE = re.compile(
+    "|".join(INTERNATIONAL_EVENT_PATTERNS), re.IGNORECASE
+)
 
 _now = lambda: datetime.now()  # noqa: E731
 
@@ -97,13 +109,9 @@ def _is_cn_match(body: str) -> bool:
 
 
 def _is_international_event(event: str) -> bool:
-    """是否为国际赛事（VCT 全球冠军赛 / Masters），而非地区联赛。"""
-    e = _clean(event).lower()
-    if not e:
-        return False
-    if any(k in e for k in INTERNATIONAL_EVENT_EXCLUDE):
-        return False
-    return any(k in e for k in INTERNATIONAL_EVENT_INCLUDE)
+    """是否为国际赛事（VCT 全球冠军赛 / 大师赛），而非地区联赛或第三方赛事。"""
+    e = _clean(event)
+    return bool(e) and bool(INTERNATIONAL_EVENT_RE.search(e))
 
 
 def _event_label(match: dict | None) -> str:

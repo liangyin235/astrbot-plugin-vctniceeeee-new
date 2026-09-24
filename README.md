@@ -28,6 +28,15 @@ ps:astrbot插件商店有一个和这个一模一样的，那个是旧版，作�
 
 判定依据：vlr.gg 赛程页比赛条目中的队伍国旗（`mod-cn`）与赛事名称。因此即使中国队被淘汰，冠军赛的淘汰赛与决赛仍会照常播报。
 
+**"国际赛事"按赛事名精确匹配**，以避免误伤：
+
+| 赛事名 | 判定 |
+| --- | --- |
+| `Valorant Champions 2026` | ✅ 全球冠军赛 |
+| `Valorant Masters Toronto 2026` / `VCT 2026: Masters Toronto` / `Champions Tour 2023: Masters Tokyo` | ✅ 大师赛 |
+| `Champions Tour 2026: China / Americas / EMEA / Pacific Stage X` | ❌ 地区联赛（仅播含中国队的场次） |
+| `KOV Masters 2026`（第三方）、`Game Changers 2026: …`（女子赛）、`Valorant Challengers 2026: …`（次级联赛） | ❌ 不属于国际赛事 |
+
 ## 更新内容
 
 ### v2.0
