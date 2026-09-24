@@ -17,15 +17,9 @@ from astrbot.core.message.message_event_result import MessageChain
 try:
     from .match_parser import fetch_match_details
     from .translations import _cn_agent
-    from .haojiao import fetch_matches as _hj_fetch_matches
-    from .haojiao import fetch_battle as _hj_fetch_battle
-    from .haojiao import to_plugin_match as _hj_to_match
 except ImportError:  # 本地直接运行 main.py 时退化为顶层导入
     from match_parser import fetch_match_details
     from translations import _cn_agent
-    from haojiao import fetch_matches as _hj_fetch_matches
-    from haojiao import fetch_battle as _hj_fetch_battle
-    from haojiao import to_plugin_match as _hj_to_match
 
 _MONTHS = {
     "January": 1, "February": 2, "March": 3, "April": 4, "May": 5, "June": 6,
@@ -44,6 +38,15 @@ REQUEST_HEADERS = {
 }
 FETCH_TIMEOUT = 30
 TRIGGER_MINUTES = 60  # 开赛前 60 分钟内视为"即将开始"
+
+# 赛事筛选策略（数据源 vlr.gg/matches）：
+#   1) 含中国队的比赛 —— 一律保留；
+#   2) 国际赛事（VCT 全球冠军赛 / Masters）—— 保留该赛事的全部比赛，
+#      这样即使中国队被淘汰，淘汰赛/决赛也能照常播报。
+# 注意：地区联赛名形如 "Champions Tour 2026: China Stage 2"，含 "champions tour"，
+# 必须排除，否则会把国内联赛的非中国队场次也一起播报。
+INTERNATIONAL_EVENT_EXCLUDE = ("champions tour",)
+INTERNATIONAL_EVENT_INCLUDE = ("champions", "masters")
 
 _now = lambda: datetime.now()  # noqa: E731
 
@@ -88,86 +91,31 @@ def _fetch_page(url: str) -> str:
     raise last_err
 
 
-def parse_page(html: str) -> list[dict]:
-    """解析 vlr.gg 赛事赛程页，返回每场比赛字典。"""
-    raw_matches = list(
-        re.finditer(
-            r'<a href="([^"]+)" class="wf-module-item match-item[^"]*"[^>]*>(.*?)</a>',
-            html,
-            re.S,
-        )
-    )
-    if not raw_matches:
-        return []
-
-    dates: list[tuple[int, str]] = []
-    for m in re.finditer(
-        r">\s*(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun),"
-        r"\s*([A-Z][a-z]+ \d{1,2}, \d{4})\s*<",
-        html,
-    ):
-        dates.append((m.start(), m.group(1)))
-
-    order: list[tuple[str, int, str]] = []
-    for pos, d in dates:
-        order.append(("D", pos, d))
-    for m in raw_matches:
-        order.append(("M", m.start(), m.group(1)))
-    order.sort(key=lambda x: x[1])
-
-    cur_date = None
-    date_of: dict[str, str] = {}
-    for kind, _pos, val in order:
-        if kind == "D":
-            cur_date = val
-        else:
-            date_of[val] = cur_date
-
-    items = []
-    for m in raw_matches:
-        href, body = m.group(1), m.group(2)
-        time_m = re.search(r'match-item-time">\s*(.*?)\s*</div>', body, re.S)
-        status_m = re.search(r'ml-status">\s*(.*?)\s*<', body, re.S)
-        eta_m = re.search(r'ml-eta[^"]*">\s*(.*?)\s*<', body, re.S)
-        series_m = re.search(
-            r'match-item-event-series[^"]*">\s*(.*?)\s*<', body, re.S
-        )
-        teams = []
-        for tm in re.finditer(
-            r'match-item-vs-team([^"]*)"[^>]*>\s*'
-            r'<div class="match-item-vs-team-name">.*?'
-            r'text-of">\s*(?:<span[^>]*></span>\s*)?([^<]+?)\s*</div>',
-            body,
-            re.S,
-        ):
-            cls, name = tm.group(1), tm.group(2)
-            teams.append({"name": _clean(name), "winner": "mod-winner" in cls})
-        scores = [
-            _clean(s)
-            for s in re.findall(
-                r'match-item-vs-team-score[^>]*>\s*([^<]*?)\s*<', body
-            )
-        ]
-        items.append(
-            {
-                "href": href,
-                "match_id": re.search(r"^/(\d+)/", href).group(1)
-                if re.search(r"^/(\d+)/", href)
-                else "",
-                "date": date_of.get(href),
-                "time": _clean(time_m.group(1)) if time_m else "",
-                "status": _clean(status_m.group(1)) if status_m else "",
-                "eta": _clean(eta_m.group(1)) if eta_m else "",
-                "series": _clean(series_m.group(1)) if series_m else "",
-                "teams": teams,
-                "scores": scores,
-            }
-        )
-    return items
-
-
 def _is_cn_match(body: str) -> bool:
+    """比赛条目里是否含中国队（vlr.gg 用队伍国旗 <span class="flag mod-cn"> 标记）。"""
     return "mod-cn" in body
+
+
+def _is_international_event(event: str) -> bool:
+    """是否为国际赛事（VCT 全球冠军赛 / Masters），而非地区联赛。"""
+    e = _clean(event).lower()
+    if not e:
+        return False
+    if any(k in e for k in INTERNATIONAL_EVENT_EXCLUDE):
+        return False
+    return any(k in e for k in INTERNATIONAL_EVENT_INCLUDE)
+
+
+def _event_label(match: dict | None) -> str:
+    """该场比赛的赛事名；取不到时回退到 EVENT_NAME。"""
+    return ((match or {}).get("event") or "").strip() or EVENT_NAME
+
+
+def _events_header(matches: list[dict], suffix: str) -> str:
+    """列表标题：只有一项赛事时显示赛事名，多项时并列显示。"""
+    evs = sorted({_event_label(m) for m in matches})
+    title = " / ".join(evs) if evs else EVENT_NAME
+    return f"{title} · {suffix}"
 
 
 def _parse_cn_matches(html: str) -> list[dict]:
@@ -207,14 +155,24 @@ def _parse_cn_matches(html: str) -> list[dict]:
     items = []
     for m in raw_matches:
         href, body = m.group(1), m.group(2)
-        if not _is_cn_match(body):
+        series_m = re.search(
+            r'match-item-event-series[^"]*">\s*(.*?)\s*<', body, re.S
+        )
+        # 赛事名紧跟在 series 的 </div> 之后：
+        #   <div class="match-item-event-series ...">Group Stage–Opening (C)</div>
+        #   Valorant Champions 2026 </div>
+        event_m = re.search(
+            r'match-item-event-series[^"]*">.*?</div>\s*([^<]*?)\s*</div>',
+            body,
+            re.S,
+        )
+        event = _clean(event_m.group(1)) if event_m else ""
+        # 保留规则：含中国队，或属于国际赛事（全球冠军赛 / Masters）
+        if not (_is_cn_match(body) or _is_international_event(event)):
             continue
         time_m = re.search(r'match-item-time">\s*(.*?)\s*</div>', body, re.S)
         status_m = re.search(r'ml-status">\s*(.*?)\s*<', body, re.S)
         eta_m = re.search(r'ml-eta[^"]*">\s*(.*?)\s*<', body, re.S)
-        series_m = re.search(
-            r'match-item-event-series[^"]*">\s*(.*?)\s*<', body, re.S
-        )
         teams = []
         for tm in re.finditer(
             r'match-item-vs-team([^"]*)"[^>]*>\s*'
@@ -242,59 +200,12 @@ def _parse_cn_matches(html: str) -> list[dict]:
                 "status": _clean(status_m.group(1)) if status_m else "",
                 "eta": _clean(eta_m.group(1)) if eta_m else "",
                 "series": _clean(series_m.group(1)) if series_m else "",
+                "event": event,
                 "teams": teams,
                 "scores": scores,
             }
         )
     return items
-
-
-def _fallback_haojiao_matches() -> list[dict]:
-    """vlr.gg 拉取失败时，从号角 HOJO 兜底赛程（前后各 3 天）。"""
-    import time as _time
-
-    now_ms = int(_time.time() * 1000)
-    items: list[dict] = []
-    for page in (1, 2, 3):
-        try:
-            res = _hj_fetch_matches(
-                start_ms=now_ms - 3 * 86400000,
-                end_ms=now_ms + 3 * 86400000,
-                page=page,
-                page_size=50,
-            )
-        except Exception as e:  # noqa: BLE001
-            logger.error("[vct_cn] 号角赛程拉取失败: %s", e)
-            break
-        lst = res.get("list") or []
-        items.extend(lst)
-        if len(items) >= res.get("count", 0) or len(lst) < 50:
-            break
-    if not items:
-        raise RuntimeError("号角无赛程数据")
-    return [_hj_to_match(i, now_ms) for i in items]
-
-
-def _fetch_details_with_fallback(mid: str) -> dict:
-    """比赛详情：优先 vlr.gg，失败时用号角 HOJO 兜底（仅总比分）。"""
-    try:
-        return fetch_match_details(mid)
-    except Exception as e:  # noqa: BLE001
-        logger.warning("[vct_cn] vlr.gg 详情 %s 失败，切换号角: %s", mid, e)
-    data = _hj_fetch_battle(mid)
-    m = data.get("match") or {}
-    if not m:
-        raise RuntimeError(f"号角无比赛 {mid} 数据")
-    vs = m.get("versus_info") or {}
-    info = {
-        "match_id": mid,
-        "score": (
-            str(vs.get("main_score") or ""),
-            str(vs.get("guest_score") or ""),
-        ),
-        "header_note": m.get("schedule_name") or "",
-    }
-    return {"url_id": mid, "match_id": mid, "match_html": "", "info": info, "games": []}
 
 
 def _eta_hours(eta: str) -> float | None:
@@ -397,12 +308,32 @@ _SERIES_CN = {
     "Finals": "决赛",
     "Regular Season": "常规赛",
     "Main Event": "正赛",
+    # 国际赛事（冠军赛 / Masters）的阶段名
+    "Opening": "揭幕战",
+    "Winner's": "胜者组",
+    "Elimination": "淘汰赛",
+    "Decider": "决胜轮",
+    "Round Robin": "循环赛",
 }
 
 
 def _cn_series(name: str) -> str:
+    """赛段名中文化。
+
+    支持 "Playoffs–Upper Semifinals"、"Group Stage–Opening (C)" 这类组合形式：
+    逐段翻译后用 "·" 连接，并保留组别后缀 "(C)"。
+    """
     name = (name or "").strip()
-    return _SERIES_CN.get(name, name)
+    if not name:
+        return name
+    if name in _SERIES_CN:
+        return _SERIES_CN[name]
+    m = re.match(r"^(.+?)\s*[–—]\s*(.+?)(\s*\([^)]*\))?$", name)
+    if m:
+        left = _SERIES_CN.get(m.group(1).strip(), m.group(1).strip())
+        right = _SERIES_CN.get(m.group(2).strip(), m.group(2).strip())
+        return f"{left}·{right}{m.group(3) or ''}"
+    return name
 
 
 def _cn_time(time_str: str) -> str:
@@ -430,8 +361,14 @@ def _fmt_match(match: dict) -> str:
             line += "  (完成)"
     else:
         line += f"  {_cn_time(match.get('time') or '')}".rstrip()
-        if match.get("series"):
-            line += f" [{_cn_series(match['series'])}]"
+        tag = _cn_series(match.get("series") or "")
+        event = (match.get("event") or "").strip()
+        if event and tag:
+            tag = f"{event} · {tag}"
+        elif event:
+            tag = event
+        if tag:
+            line += f" [{tag}]"
     return line
 
 
@@ -475,14 +412,14 @@ def _game_mvp(game: dict) -> dict | None:
     return max(ps, key=_mvp_key)
 
 
-def _format_game_report(game: dict) -> str:
+def _format_game_report(game: dict, match: dict | None = None) -> str:
     """单图播报：比分 + MVP。"""
     t1, t2 = game.get("teams") or ["", ""]
     s1 = (game.get("scores") or {}).get(t1) or {}
     s2 = (game.get("scores") or {}).get(t2) or {}
     title = game.get("map_cn") or game.get("map") or "未知地图"
     header = (
-        f"{EVENT_NAME} · 对局「{title}」结束\n"
+        f"{_event_label(match)} · 对局「{title}」结束\n"
         f"{_team_display(t1)} {s1.get('total',0)} : "
         f"{s2.get('total',0)} {_team_display(t2)}"
     )
@@ -505,7 +442,7 @@ def _format_starting_report(match: dict) -> str:
     if len(teams) < 2:
         return ""
     t1, t2 = teams[0], teams[1]
-    header = f"{EVENT_NAME} · 即将开赛"
+    header = f"{_event_label(match)} · 即将开赛"
     eta_h = _eta_hours(match.get("eta"))
     eta_txt = ""
     if eta_h is not None:
@@ -543,7 +480,7 @@ def _format_live_score(match: dict, games: list[dict]) -> str:
     w1 = map_wins.get(t1, 0)
     w2 = map_wins.get(t2, 0)
     header = (
-        f"{EVENT_NAME} · 比赛进行中\n"
+        f"{_event_label(match)} · 比赛进行中\n"
         f"{_team_display(t1)} {w1} : {w2} {_team_display(t2)}"
     )
     lines = [header]
@@ -564,7 +501,7 @@ def _format_final_report(match: dict, games: list[dict], is_final: bool = True) 
     t1 = teams[0]["name"] if teams else ""
     t2 = teams[1]["name"] if len(teams) > 1 else ""
     header = (
-        f"{EVENT_NAME} · {'比赛结束' if is_final else '比赛进行中'}\n"
+        f"{_event_label(match)} · {'比赛结束' if is_final else '比赛进行中'}\n"
         f"{_team_display(t1)} {scores[0] if scores else '?'} : "
         f"{scores[1] if len(scores) > 1 else '?'} {_team_display(t2)}"
     )
@@ -796,7 +733,7 @@ class VctCnPlugin(Star):
             ):
                 continue
             try:
-                det = _fetch_details_with_fallback(mid)
+                det = fetch_match_details(mid)
                 games = det["games"]
             except Exception as e:  # noqa: BLE001
                 logger.error("[vct_cn] 拉取进行中详情 %s 失败: %s", mid, e)
@@ -818,13 +755,9 @@ class VctCnPlugin(Star):
             matches = _parse_cn_matches(html)
         except Exception as e:  # noqa: BLE001
             logger.error("[vct_cn] 实时详情拉取失败: %s", e)
-            matches = []
+            return
         if not matches:
-            try:
-                matches = _fallback_haojiao_matches()
-            except Exception as e:  # noqa: BLE001
-                logger.error("[vct_cn] 实时详情好角落代偿失败: %s", e)
-                return
+            return
         await self._notify_live_detail(matches)
 
     async def _auto_broadcast(self):
@@ -836,14 +769,10 @@ class VctCnPlugin(Star):
             matches = _parse_cn_matches(html)
         except Exception as e:  # noqa: BLE001
             logger.error("[vct_cn] 自动拉取失败: %s", e)
-            matches = []
+            return
         if not matches:
-            try:
-                matches = _fallback_haojiao_matches()
-                logger.info("[vct_cn] vlr.gg 无数据，已切换号角兜底（%d 场）", len(matches))
-            except Exception as e:  # noqa: BLE001
-                logger.error("[vct_cn] 号角兜底失败: %s", e)
-                return
+            logger.info("[vct_cn] vlr.gg 当前无比赛数据，跳过本轮")
+            return
 
         await self._notify_starting(matches)
 
@@ -854,7 +783,7 @@ class VctCnPlugin(Star):
             if mid not in current_mids and not self._state.get("reported", {}).get(mid):
                 # 之前是 LIVE，现在不在页面上了 = 比赛结束被移除
                 try:
-                    det = _fetch_details_with_fallback(mid)
+                    det = fetch_match_details(mid)
                     games = det["games"]
                     if games and all(_game_done(g) for g in games):
                         # 找到对应的比赛信息（从之前的记录）
@@ -915,9 +844,6 @@ class VctCnPlugin(Star):
             mid = m.get("match_id")
             if not mid or m.get("status") != "Completed":
                 continue
-            if m.get("source") == "haojiao":
-                # 号角兜底数据不做历史结果补发，避免兜底时刷屏
-                continue
             if self._state.get("reported", {}).get(mid):
                 continue
             if m.get("teams") and any(
@@ -925,7 +851,7 @@ class VctCnPlugin(Star):
             ):
                 continue
             try:
-                det = _fetch_details_with_fallback(mid)
+                det = fetch_match_details(mid)
                 games = det["games"]
                 text = _format_final_report(m, games)
                 if not text:
@@ -948,8 +874,6 @@ class VctCnPlugin(Star):
             mid = m.get("match_id")
             if not mid or m.get("status") not in ("Upcoming", "Live", "LIVE"):
                 continue
-            if m.get("source") == "haojiao":
-                continue  # 号角暂无每图数据，单图播报仅支持 vlr 来源
             if m.get("status") == "Upcoming":
                 eta = _eta_hours(m.get("eta"))
                 if eta is None or eta > 24:
@@ -959,7 +883,7 @@ class VctCnPlugin(Star):
             ):
                 continue
             try:
-                det = _fetch_details_with_fallback(mid)
+                det = fetch_match_details(mid)
                 games = det["games"]
             except Exception as e:  # noqa: BLE001
                 logger.error("[vct_cn] 拉取比赛详情 %s 失败: %s", mid, e)
@@ -973,7 +897,7 @@ class VctCnPlugin(Star):
             for g in games:
                 if g.get("game_id") not in pending:
                     continue
-                text = _format_game_report(g)
+                text = _format_game_report(g, m)
                 if not text:
                     continue
                 sent = await self._send(text)
@@ -1050,12 +974,8 @@ class VctCnPlugin(Star):
         try:
             matches = _parse_cn_matches(_fetch_page(MATCHES_URL))
         except Exception as e:  # noqa: BLE001
-            try:
-                matches = _fallback_haojiao_matches()
-                logger.info("[vct_cn] 手动查询 vlr.gg 失败，已切换好角落代偿")
-            except Exception as e2:  # noqa: BLE001
-                yield event.plain_result(f"获取失败: {e}; 好角落代偿失败: {e2}")
-                return
+            yield event.plain_result(f"获取失败: {e}")
+            return
 
         if not matches:
             yield event.plain_result("未解析到任何比赛数据（页面结构可能已变化）")
@@ -1082,7 +1002,7 @@ class VctCnPlugin(Star):
         if not mid:
             return "用法: /vct match <比赛ID或 vlr.gg 链接>"
         try:
-            det = _fetch_details_with_fallback(mid)
+            det = fetch_match_details(mid)
             info = det["info"]
             games = det["games"]
         except Exception as e:  # noqa: BLE001
@@ -1184,7 +1104,7 @@ class VctCnPlugin(Star):
         ]
         if not today:
             return "24 小时内暂无 VCT CN 比赛"
-        lines = [f"{EVENT_NAME} · 近 24 小时", ""]
+        lines = [_events_header(today, "近 24 小时"), ""]
         grouped: dict[str, list[dict]] = {}
         for m in today:
             grouped.setdefault(m.get("date") or "近期", []).append(m)
@@ -1197,7 +1117,7 @@ class VctCnPlugin(Star):
         return "\n".join(lines)
 
     def _render_all(self, matches: list[dict]) -> str:
-        lines = [f"{EVENT_NAME} · 全部赛程", ""]
+        lines = [_events_header(matches, "全部赛程"), ""]
         grouped: dict[str, list[dict]] = {}
         for m in matches:
             if not m.get("date"):
@@ -1226,7 +1146,7 @@ class VctCnPlugin(Star):
         completed = [m for m in matches if m.get("status") == "Completed"]
         if not completed:
             return "暂无已完成的比赛结果"
-        lines = [f"{EVENT_NAME} · 比赛结果", ""]
+        lines = [_events_header(completed, "比赛结果"), ""]
         grouped: dict[str, list[dict]] = {}
         for m in completed:
             grouped.setdefault(m.get("date") or "未知日期", []).append(m)
