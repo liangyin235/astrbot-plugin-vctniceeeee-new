@@ -3,6 +3,6 @@ display_name: VCT 比赛播报
 desc: 拉取 vlr.gg 的 VCT 赛程与比分（含中国赛区及全球冠军赛/Masters），支持定时播报、手动查询、比赛详情（地图/比分/MVP）与实时监控。
 short_desc: VCT 赛事播报（中国赛区 / 全球冠军赛）
 author: liangyin235
-version: "2.0"
+version: "2.0.0"
 repo: https://github.com/liangyin235/astrbot-plugin-vctniceeeee-new
 astrbot_version: '>=4.16,<5'
