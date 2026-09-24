@@ -120,7 +120,7 @@ astrbot_plugin_vctniceeeee_new/
 └── README.md
 ```
 
-> `monitor_state.json` 为运行期自动生成的状态文件，已加入 `.gitignore`，不会提交。
+> 运行期状态文件（`monitor_state.json`）保存在 AstrBot 的 `data/plugin_data/astrbot_plugin_vctniceeeee_new/` 目录下，不会写进插件目录；旧版本遗留在插件目录内的同名文件会在首次加载时自动迁移。
 
 ## 许可
 

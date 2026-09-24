@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import html as _html
 import json
 import os
 import re
+import tempfile
 import time
 import urllib.request
 from datetime import datetime
@@ -27,6 +29,7 @@ _MONTHS = {
     "December": 12,
 }
 
+PLUGIN_NAME = "astrbot_plugin_vctniceeeee_new"
 MATCHES_URL = "https://www.vlr.gg/matches"
 EVENT_NAME = "VCT CN"
 REQUEST_HEADERS = {
@@ -101,6 +104,47 @@ def _fetch_page(url: str) -> str:
             last_err = e
             time.sleep(2)
     raise last_err
+
+
+async def _fetch_matches_async() -> list[dict]:
+    """抓取并解析 vlr.gg 赛程页。
+
+    urllib 请求与正则解析都是同步阻塞的，统一放到线程池执行，
+    避免阻塞 AstrBot 的事件循环（影响其他插件与平台并发）。
+    """
+
+    def _job() -> list[dict]:
+        return _parse_cn_matches(_fetch_page(MATCHES_URL))
+
+    return await asyncio.to_thread(_job)
+
+
+async def _fetch_details_async(mid: str) -> dict:
+    """抓取比赛详情（同步实现在线程池中执行，避免阻塞事件循环）。"""
+    return await asyncio.to_thread(fetch_match_details, mid)
+
+
+def _plugin_data_dir() -> str:
+    """插件运行期数据目录：<AstrBot data>/plugin_data/<plugin_name>/。
+
+    按 AstrBot 规范，插件数据不应写进插件自身目录，统一放在
+    data/plugin_data/ 下，便于备份、迁移与审计。
+    """
+    try:
+        from astrbot.core.star.star_tools import StarTools
+
+        return str(StarTools.get_data_dir(PLUGIN_NAME))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[vct_cn] StarTools 获取数据目录失败，尝试回退: %s", e)
+    try:
+        from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
+
+        base = os.path.join(get_astrbot_plugin_data_path(), PLUGIN_NAME)
+    except Exception:  # noqa: BLE001
+        # 最后的兜底（非 AstrBot 环境下单独运行 main.py 时）
+        base = os.path.join(tempfile.gettempdir(), PLUGIN_NAME)
+    os.makedirs(base, exist_ok=True)
+    return base
 
 
 def _is_cn_match(body: str) -> bool:
@@ -564,7 +608,7 @@ _HELP_TEXT = (
 
 
 @register(
-    "astrbot_plugin_vctniceeeee_new",
+    PLUGIN_NAME,
     "liangyin235",
     "VCT CN 无畏契约中国赛区比赛播报（赛程 / 比分 / 详情 / 实时监控）",
     "1.2.0",
@@ -576,7 +620,10 @@ class VctCnPlugin(Star):
         self.config = config or {}
         self._scheduler = None
         self._bind_result = ""
-        self._state_path = os.path.join(
+        # 运行期状态放在 data/plugin_data/<plugin_name>/，不写进插件目录
+        self._state_path = os.path.join(_plugin_data_dir(), "monitor_state.json")
+        # 旧版本曾把状态文件放在插件目录内，仅用于一次性迁移
+        self._legacy_state_path = os.path.join(
             os.path.dirname(os.path.abspath(__file__)), "monitor_state.json"
         )
         self._state = self._load_state()
@@ -609,6 +656,15 @@ class VctCnPlugin(Star):
             if os.path.exists(self._state_path):
                 with open(self._state_path, "r", encoding="utf-8") as f:
                     return json.load(f)
+            legacy = self._legacy_state_path
+            if legacy and os.path.exists(legacy):
+                # 兼容旧版本：状态文件曾在插件目录内，读取后迁移到 plugin_data
+                with open(legacy, "r", encoding="utf-8") as f:
+                    state = json.load(f)
+                self._state = state  # 供 _save_state 使用
+                self._save_state()
+                logger.info("[vct_cn] 状态文件已迁移到 %s", self._state_path)
+                return state
         except Exception as e:  # noqa: BLE001
             logger.error("[vct_cn] 读取状态失败: %s", e)
         return {"reported": {}, "game_reported": {}}
@@ -741,7 +797,7 @@ class VctCnPlugin(Star):
             ):
                 continue
             try:
-                det = fetch_match_details(mid)
+                det = await _fetch_details_async(mid)
                 games = det["games"]
             except Exception as e:  # noqa: BLE001
                 logger.error("[vct_cn] 拉取进行中详情 %s 失败: %s", mid, e)
@@ -759,8 +815,7 @@ class VctCnPlugin(Star):
     async def _live_detail_tick(self):
         """实时比赛专用轮询：每 5 分钟拉一次赛事详情，有比赛进行中才播报"""
         try:
-            html = _fetch_page(MATCHES_URL)
-            matches = _parse_cn_matches(html)
+            matches = await _fetch_matches_async()
         except Exception as e:  # noqa: BLE001
             logger.error("[vct_cn] 实时详情拉取失败: %s", e)
             return
@@ -773,8 +828,7 @@ class VctCnPlugin(Star):
         import asyncio as _aio
         await _aio.sleep(20)
         try:
-            html = _fetch_page(MATCHES_URL)
-            matches = _parse_cn_matches(html)
+            matches = await _fetch_matches_async()
         except Exception as e:  # noqa: BLE001
             logger.error("[vct_cn] 自动拉取失败: %s", e)
             return
@@ -791,7 +845,7 @@ class VctCnPlugin(Star):
             if mid not in current_mids and not self._state.get("reported", {}).get(mid):
                 # 之前是 LIVE，现在不在页面上了 = 比赛结束被移除
                 try:
-                    det = fetch_match_details(mid)
+                    det = await _fetch_details_async(mid)
                     games = det["games"]
                     if games and all(_game_done(g) for g in games):
                         # 找到对应的比赛信息（从之前的记录）
@@ -859,7 +913,7 @@ class VctCnPlugin(Star):
             ):
                 continue
             try:
-                det = fetch_match_details(mid)
+                det = await _fetch_details_async(mid)
                 games = det["games"]
                 text = _format_final_report(m, games)
                 if not text:
@@ -891,7 +945,7 @@ class VctCnPlugin(Star):
             ):
                 continue
             try:
-                det = fetch_match_details(mid)
+                det = await _fetch_details_async(mid)
                 games = det["games"]
             except Exception as e:  # noqa: BLE001
                 logger.error("[vct_cn] 拉取比赛详情 %s 失败: %s", mid, e)
@@ -980,7 +1034,7 @@ class VctCnPlugin(Star):
             return
 
         try:
-            matches = _parse_cn_matches(_fetch_page(MATCHES_URL))
+            matches = await _fetch_matches_async()
         except Exception as e:  # noqa: BLE001
             yield event.plain_result(f"获取失败: {e}")
             return
@@ -1010,7 +1064,7 @@ class VctCnPlugin(Star):
         if not mid:
             return "用法: /vct match <比赛ID或 vlr.gg 链接>"
         try:
-            det = fetch_match_details(mid)
+            det = await _fetch_details_async(mid)
             info = det["info"]
             games = det["games"]
         except Exception as e:  # noqa: BLE001
