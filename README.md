@@ -39,6 +39,12 @@ ps:astrbot插件商店有一个和这个一模一样的，那个是旧版，作�
 
 ## 更新内容
 
+### v2.0.1
+
+- ⚡ **不再阻塞事件循环**：赛程 / 详情的网络抓取改为通过 `asyncio.to_thread` 在线程池执行（含正则解析），不再阻塞 AstrBot 事件循环、影响其他插件与平台并发
+- 📁 **运行期数据位置规范化**：状态文件改存 `data/plugin_data/astrbot_plugin_vctniceeeee_new/`，不再写入插件自身目录；旧位置的同名文件会在首次加载时自动迁移
+- 🔁 **详情抓取增加退避重试**：vlr.gg 偶发连接截断（`IncompleteRead` / `RemoteDisconnected` / SSL EOF）时最多重试 3 次，减少详情播报丢失
+
 ### v2.0.0
 
 - 🌏 **支持国际赛事**：全球冠军赛（Valorant Champions）与 Masters 的**全部**比赛都会播报，不再只播含中国队的场次；即使中国队被淘汰，淘汰赛与决赛也能照常推送
