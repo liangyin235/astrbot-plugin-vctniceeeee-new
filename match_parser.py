@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import time
 import urllib.request
 
 try:
@@ -31,19 +32,42 @@ def _get_proxy_handler():
     return None
 
 
-def fetch(url: str, referer: str = "") -> str:
-    headers = dict(REQ_HEADERS)
-    if referer:
-        headers["Referer"] = referer
-    req = urllib.request.Request(url, headers=headers)
+FETCH_RETRIES = 3
+FETCH_BACKOFF_SEC = 1.5
+
+
+def _fetch_once(req: urllib.request.Request) -> str:
     handler = _get_proxy_handler()
     if handler:
         opener = urllib.request.build_opener(handler)
         with opener.open(req, timeout=30) as resp:
             return resp.read().decode("utf-8", errors="ignore")
-    else:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            return resp.read().decode("utf-8", errors="ignore")
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return resp.read().decode("utf-8", errors="ignore")
+
+
+def fetch(url: str, referer: str = "") -> str:
+    """GET 并返回文本内容。
+
+    vlr.gg 偶发连接截断（IncompleteRead / RemoteDisconnected / SSL EOF），
+    这里做有限次退避重试。
+
+    注意：本函数是同步阻塞的，调用方需放在线程池中执行，
+    见 ``main._fetch_details_async``（asyncio.to_thread）。
+    """
+    headers = dict(REQ_HEADERS)
+    if referer:
+        headers["Referer"] = referer
+    last_err: Exception | None = None
+    for attempt in range(FETCH_RETRIES):
+        try:
+            return _fetch_once(urllib.request.Request(url, headers=headers))
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+            if attempt < FETCH_RETRIES - 1:
+                time.sleep(FETCH_BACKOFF_SEC * (attempt + 1))
+    assert last_err is not None
+    raise last_err
 
 
 fetch_page_html = fetch
