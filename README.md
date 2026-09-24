@@ -1,8 +1,12 @@
 # astrbot_plugin_vctniceeeee_new
 
+https://github.com/user-attachments/assets/970449cc-5488-4173-8085-69561ed3144d
+
 > VCT CN（无畏契约中国赛区）比赛播报插件 · for [AstrBot](https://github.com/AstrBotDevs/AstrBot)
 
 拉取 vlr.gg 的 VCT 赛程与比分，支持**定时自动播报**、**手动查询**、**比赛详情（地图 / 比分 / 选手数据 / MVP）** 以及**比赛进行中的实时监控播报**。
+
+ps:astrbot插件商店有一个和这个一模一样的，那个是旧版，作者都是我
 
 ## 功能特性
 
