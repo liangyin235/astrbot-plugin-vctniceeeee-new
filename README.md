@@ -104,6 +104,7 @@ ps:astrbot插件商店有一个和这个一模一样的，那个是旧版，作�
 | `target_sessions` | list | `[]` | 定时播报的目标会话列表（如 `qq/123456`），可用 `/vct bind` 动态添加；留空则仅手动查询 |
 | `poll_interval_min` | int | `30` | 定时自动播报的检查间隔（分钟） |
 | `live_poll_min` | int | `5` | 比赛进行中实时播报详情的间隔（分钟） |
+| `show_player_rating` | bool | `false` | 选手战绩是否显示详细评分与 ACS。开启为「评分 / ACS / K-D-A」，关闭（默认）只显示 K-D-A。**开启后每行变长，可能会影响观感** |
 
 ## 依赖
 

@@ -16,5 +16,11 @@
     "type": "int",
     "hint": "默认 5",
     "default": 5
+  },
+  "show_player_rating": {
+    "description": "选手战绩显示详细评分与 ACS",
+    "type": "bool",
+    "hint": "开启后选手行显示「评分 / ACS / K-D-A」，例如：siufatbb（黑梦）1.23 / 250 / 13-12-2；关闭则只显示 K-D-A，例如：siufatbb（黑梦）13-12-2。注意：开启后每行信息明显变长，可能会影响观感。",
+    "default": false
   }
 }

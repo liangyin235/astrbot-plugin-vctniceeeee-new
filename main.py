@@ -436,14 +436,29 @@ def _game_players(game: dict) -> list:
     return ps
 
 
+# 是否在选手战绩中显示详细评分与 ACS（由插件配置 show_player_rating 控制）
+_SHOW_PLAYER_RATING = False
+
+
+def _set_show_player_rating(flag: object) -> None:
+    global _SHOW_PLAYER_RATING
+    _SHOW_PLAYER_RATING = bool(flag)
+
+
 def _fmt_player_line(p: dict) -> str:
-    line = f"{p.get('name','?')} ({_cn_agent(p.get('agent'))}) "
-    rating = p.get("rating", 0) or 0
-    acs = p.get("acs", 0) or 0
-    if rating > 0:
-        line += f"{rating:.2f} / {acs} / "
-    line += f"{p.get('kills',0)}-{p.get('deaths',0)}-{p.get('assists',0)}"
-    return line
+    """选手一行：名字（中文英雄名）+ 战绩。
+
+    - show_player_rating 关闭（默认）：只显示 K-D-A
+      例：siufatbb（黑梦）13-12-2
+    - show_player_rating 开启：额外显示 评分 / ACS
+      例：siufatbb（黑梦）1.23 / 250 / 13-12-2
+    """
+    line = f"{p.get('name', '?')}（{_cn_agent(p.get('agent'))}）"
+    if _SHOW_PLAYER_RATING:
+        rating = p.get("rating", 0) or 0
+        if rating > 0:
+            line += f"{rating:.2f} / {p.get('acs', 0) or 0} / "
+    return line + f"{p.get('kills', 0)}-{p.get('deaths', 0)}-{p.get('assists', 0)}"
 
 
 def _game_mvp(game: dict) -> dict | None:
@@ -466,7 +481,7 @@ def _game_mvp(game: dict) -> dict | None:
 
 def _format_game_report(game: dict, match: dict | None = None) -> str:
     """单图播报：比分 + MVP。"""
-    t1, t2 = game.get("teams") or ["", ""]
+    t1, t2 = _teams2(game)
     s1 = (game.get("scores") or {}).get(t1) or {}
     s2 = (game.get("scores") or {}).get(t2) or {}
     title = game.get("map_cn") or game.get("map") or "未知地图"
@@ -475,7 +490,7 @@ def _format_game_report(game: dict, match: dict | None = None) -> str:
         f"{_team_display(t1)} {s1.get('total',0)} : "
         f"{s2.get('total',0)} {_team_display(t2)}"
     )
-    mvp = _game_mvp(game)
+    mvp = None if (_is_tbd_name(t1) or _is_tbd_name(t2)) else _game_mvp(game)
     lines = [header]
     if s1 or s2:
         lines.append(
@@ -568,7 +583,7 @@ def _format_final_report(match: dict, games: list[dict], is_final: bool = True) 
         t1n, t2n = _teams2(g)
         s1 = (g.get("scores") or {}).get(t1n, {})
         s2 = (g.get("scores") or {}).get(t2n, {})
-        mvp = _game_mvp(g)
+        mvp = None if (_is_tbd_name(t1n) or _is_tbd_name(t2n)) else _game_mvp(g)
         won = g.get("winner") or t1n or "?"
         mvp_txt = f", MVP {_fmt_player_line(mvp)}" if mvp else ""
         lines.append(
@@ -592,6 +607,17 @@ def _teams2(g: dict) -> tuple[str, str]:
     t1 = ts[0] if len(ts) > 0 else ""
     t2 = ts[1] if len(ts) > 1 else ""
     return t1, t2
+
+
+# 队伍标记符号（用于在选手列表中标出所属队伍）
+_TEAM_MARK = "▍"
+_TBD_TOKENS = ("TBD", "待定", "?")
+
+
+def _is_tbd_name(name: str) -> bool:
+    """队伍名是否为"待定"（TBD / 待定 / 空）。"""
+    s = (name or "").strip()
+    return not s or s.upper() in _TBD_TOKENS
 
 
 _HELP_TEXT = (
@@ -618,6 +644,7 @@ class VctCnPlugin(Star):
     def __init__(self, context: Context, config: dict | None = None):
         super().__init__(context)
         self.config = config or {}
+        _set_show_player_rating(self.config.get("show_player_rating", False))
         self._scheduler = None
         self._bind_result = ""
         # 运行期状态放在 data/plugin_data/<plugin_name>/，不写进插件目录
@@ -1098,26 +1125,28 @@ class VctCnPlugin(Star):
                     f"  {_team_short(t1n)} {s1.get('ct',0)}防/{s1.get('t',0)}攻 · "
                     f"{_team_short(t2n)} {s2.get('ct',0)}防/{s2.get('t',0)}攻"
                 )
+            # 队伍待定（TBD）时不展示选手信息与 MVP
+            team_tbd = _is_tbd_name(t1n) or _is_tbd_name(t2n)
             raw_ps = g.get("players") or []
-            if raw_ps:
-                # 按 p["team"]（vlr.gg 的队伍 tag）分组，每名选手单独一行
-                from collections import defaultdict
-                grps = defaultdict(list)
-                for p in raw_ps:
-                    grps[_norm_team(p.get("team") or "", t1n, t2n)].append(p)
-                for tn in (t1n, t2n):
-                    ps = sorted(grps.get(tn, []), key=_player_rank_key, reverse=True)
-                    if ps:
-                        lines.append(f"  {_team_short(tn)}")
-                        for p in ps:
-                            lines.append(f"    {_fmt_player_line(p)}")
-            else:
-                ps = _game_players(g)
-                for i, p in enumerate(ps[:5]):
-                    lines.append(f"  {i+1}. {_fmt_player_line(p)}")
-            mvp = _game_mvp(g)
-            if mvp:
-                lines.append(f"  MVP: {_fmt_player_line(mvp)}")
+            if not team_tbd:
+                if raw_ps:
+                    # 按 p["team"]（vlr.gg 的队伍 tag）分组，每名选手单独一行
+                    from collections import defaultdict
+                    grps = defaultdict(list)
+                    for p in raw_ps:
+                        grps[_norm_team(p.get("team") or "", t1n, t2n)].append(p)
+                    for tn in (t1n, t2n):
+                        ps = sorted(grps.get(tn, []), key=_player_rank_key, reverse=True)
+                        if ps:
+                            lines.append(f"  {_TEAM_MARK}{_team_short(tn)}")
+                            for p in ps:
+                                lines.append(f"    {_fmt_player_line(p)}")
+                else:
+                    for i, p in enumerate(_game_players(g)[:5]):
+                        lines.append(f"  {i+1}. {_fmt_player_line(p)}")
+                mvp = _game_mvp(g)
+                if mvp:
+                    lines.append(f"  MVP: {_fmt_player_line(mvp)}")
         return "\n".join(lines)
 
     async def _do_bind(self, event: AstrMessageEvent):
